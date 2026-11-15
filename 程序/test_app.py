@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import re
 import sqlite3
@@ -21,6 +22,17 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from highlight_manager import HighlightManager
 from build_release import build_release_archive
+from rclone_sync import sync_through_rclone, validate_rclone_remote
+from update_manager import (
+    RELEASE_FORMAT,
+    UpdateError,
+    _extract_validated_archive,
+    check_for_updates,
+    install_prepared_update,
+    prepare_termux_update,
+    rollback_prepared_update,
+)
+import update_termux
 from app import (
     DEFAULT_GROUP,
     LocalNoteServer,
@@ -2373,6 +2385,8 @@ class ReleaseBuilderTests(unittest.TestCase):
                 "2.3.4",
             )
 
+            self.assertEqual(archive_path.name, "TangoNote-2.3.4.zip")
+            self.assertEqual(manifest_path.name, "TangoNote-2.3.4.json")
             with zipfile.ZipFile(archive_path) as archive:
                 archived_names = set(archive.namelist())
             self.assertIn("程序/app.py", archived_names)
@@ -2383,10 +2397,324 @@ class ReleaseBuilderTests(unittest.TestCase):
             self.assertNotIn("程序/test_app.py", archived_names)
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["version"], "2.3.4")
+            self.assertEqual(manifest["platform"], "windows-termux")
             self.assertEqual(
                 manifest["sha256"],
                 hashlib.sha256(archive_path.read_bytes()).hexdigest(),
             )
+
+
+class UpdateManagerTests(unittest.TestCase):
+    @staticmethod
+    def release_payload(version: str = "0.2.0") -> dict[str, object]:
+        return {
+            "tag_name": f"v{version}",
+            "html_url": f"https://github.com/mokusa11/TangoNote/releases/tag/v{version}",
+            "body": "Bug fixes",
+            "assets": [
+                {
+                    "name": f"TangoNote-{version}.zip",
+                    "browser_download_url": (
+                        f"https://github.com/mokusa11/TangoNote/releases/download/"
+                        f"v{version}/TangoNote-{version}.zip"
+                    ),
+                },
+                {
+                    "name": f"TangoNote-{version}.json",
+                    "browser_download_url": (
+                        f"https://github.com/mokusa11/TangoNote/releases/download/"
+                        f"v{version}/TangoNote-{version}.json"
+                    ),
+                },
+            ],
+        }
+
+    def test_check_for_updates_reports_a_new_release(self) -> None:
+        payload = self.release_payload()
+        with patch(
+            "update_manager.urlopen",
+            return_value=io.BytesIO(json.dumps(payload).encode("utf-8")),
+        ):
+            result = check_for_updates()
+
+        self.assertTrue(result["update_available"])
+        self.assertEqual(result["current_version"], "0.1.0")
+        self.assertEqual(result["latest_version"], "0.2.0")
+        self.assertEqual(
+            result["release_url"],
+            "https://github.com/mokusa11/TangoNote/releases/latest",
+        )
+        self.assertEqual(result["release_notes"], "Bug fixes")
+
+    def test_check_for_updates_rejects_releases_without_both_assets(self) -> None:
+        payload = self.release_payload()
+        payload["assets"] = payload["assets"][:1]
+        with patch(
+            "update_manager.urlopen",
+            return_value=io.BytesIO(json.dumps(payload).encode("utf-8")),
+        ):
+            with self.assertRaisesRegex(UpdateError, "缺少程序 ZIP"):
+                check_for_updates()
+
+    def test_termux_update_download_verifies_manifest_and_extracts_program(self) -> None:
+        payload = self.release_payload()
+        archive_bytes = io.BytesIO()
+        with zipfile.ZipFile(archive_bytes, "w") as archive:
+            archive.writestr("程序/app.py", "print('updated')\n")
+            archive.writestr("网页/index.html", "<main>updated</main>")
+        archive_data = archive_bytes.getvalue()
+        manifest_data = json.dumps(
+            {
+                "format": RELEASE_FORMAT,
+                "version": "0.2.0",
+                "platform": "windows-termux",
+                "archive": "TangoNote-0.2.0.zip",
+                "sha256": hashlib.sha256(archive_data).hexdigest(),
+            }
+        ).encode("utf-8")
+        responses = [
+            io.BytesIO(json.dumps(payload).encode("utf-8")),
+            io.BytesIO(manifest_data),
+            io.BytesIO(archive_data),
+        ]
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            staging = Path(temporary_directory)
+            with patch("update_manager.urlopen", side_effect=responses):
+                result = prepare_termux_update(staging)
+
+            self.assertEqual(result["version"], "0.2.0")
+            self.assertEqual(result["file_count"], 2)
+            self.assertEqual(
+                (staging / "package" / "程序" / "app.py").read_text(
+                    encoding="utf-8"
+                ),
+                "print('updated')\n",
+            )
+
+    def test_update_installer_preserves_user_data_and_can_roll_back(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            project = root / "project"
+            program = project / "程序"
+            web = project / "网页"
+            staging = root / "staging"
+            package = staging / "package"
+            (program / "note").mkdir(parents=True)
+            web.mkdir(parents=True)
+            (program / "app.py").write_text("old code", encoding="utf-8")
+            (program / "settings.json").write_text("private settings", encoding="utf-8")
+            (program / "highlight-rules.json").write_text("private rules", encoding="utf-8")
+            (program / "note" / "private.txt").write_text("private note", encoding="utf-8")
+            (web / "index.html").write_text("old page", encoding="utf-8")
+            (package / "程序").mkdir(parents=True)
+            (package / "网页").mkdir(parents=True)
+            (package / "程序" / "app.py").write_text("new code", encoding="utf-8")
+            (package / "程序" / "new_module.py").write_text("new module", encoding="utf-8")
+            (package / "网页" / "index.html").write_text("new page", encoding="utf-8")
+            (staging / "staging.json").write_text(
+                json.dumps(
+                    {
+                        "format": RELEASE_FORMAT,
+                        "version": "0.2.0",
+                        "file_count": 3,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            installed = install_prepared_update(staging, project)
+
+            self.assertEqual(installed["version"], "0.2.0")
+            self.assertEqual((program / "app.py").read_text(encoding="utf-8"), "new code")
+            self.assertEqual(
+                (program / "settings.json").read_text(encoding="utf-8"),
+                "private settings",
+            )
+            self.assertEqual(
+                (program / "highlight-rules.json").read_text(encoding="utf-8"),
+                "private rules",
+            )
+            self.assertEqual(
+                (program / "note" / "private.txt").read_text(encoding="utf-8"),
+                "private note",
+            )
+            self.assertEqual((web / "index.html").read_text(encoding="utf-8"), "new page")
+
+            rollback_prepared_update(staging, project)
+
+            self.assertEqual((program / "app.py").read_text(encoding="utf-8"), "old code")
+            self.assertFalse((program / "new_module.py").exists())
+            self.assertEqual((web / "index.html").read_text(encoding="utf-8"), "old page")
+
+    def test_update_archive_rejects_path_traversal_and_private_files(self) -> None:
+        for member_name in ("../outside.py", "程序/settings.json", "程序/note/private.txt"):
+            with self.subTest(member=member_name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                archive_path = root / "malicious.zip"
+                with zipfile.ZipFile(archive_path, "w") as archive:
+                    archive.writestr(member_name, "not allowed")
+                with self.assertRaises(UpdateError):
+                    _extract_validated_archive(archive_path, root / "stage")
+
+
+class TermuxUpdateTests(unittest.TestCase):
+    def test_update_refuses_to_replace_files_used_by_unmanaged_service(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            app_directory = Path(temporary_directory) / "程序"
+            app_directory.mkdir()
+            with (
+                patch("update_termux._service_is_running", return_value=False),
+                patch("update_termux._service_is_responding", return_value=True),
+                patch("update_termux.prepare_termux_update") as prepare_update,
+            ):
+                with self.assertRaisesRegex(UpdateError, "无法确认其启动进程"):
+                    update_termux.update(app_directory)
+
+            prepare_update.assert_not_called()
+
+
+class RcloneSyncTests(unittest.TestCase):
+    def test_remote_validation_rejects_shell_like_or_malformed_values(self) -> None:
+        self.assertEqual(validate_rclone_remote(" onedrive:MyNote "), "onedrive:MyNote")
+        for remote in ("--config=x:MyNote", "onedrive", "onedrive:MyNote\nrclone"):
+            with self.subTest(remote=remote), self.assertRaises(StoreError):
+                validate_rclone_remote(remote)
+
+    def test_sync_downloads_remote_then_uploads_after_local_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            trace: list[str] = []
+
+            def run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+                trace.append(
+                    f"{command[1]} {command[2]}"
+                    + (f" -> {command[3]}" if len(command) > 3 else "")
+                )
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            with (
+                patch("rclone_sync.shutil.which", return_value="rclone"),
+                patch("rclone_sync.subprocess.run", side_effect=run),
+            ):
+                result = sync_through_rclone(
+                    "onedrive:MyNote",
+                    Path(temporary_directory),
+                    lambda: trace.append("local-sync") or {"uploaded": 1},
+                )
+
+        self.assertEqual(result, {"uploaded": 1})
+        self.assertEqual(
+            trace,
+            [
+                "mkdir onedrive:MyNote/.dict-tango-sync",
+                f"copy onedrive:MyNote/.dict-tango-sync -> "
+                f"{Path(temporary_directory) / '.dict-tango-sync'}",
+                "local-sync",
+                f"copy {Path(temporary_directory) / '.dict-tango-sync'} -> "
+                "onedrive:MyNote/.dict-tango-sync",
+            ],
+        )
+
+    def test_missing_rclone_is_reported_instead_of_running_local_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with patch("rclone_sync.shutil.which", return_value=None):
+                with self.assertRaisesRegex(StoreError, "未安装 rclone"):
+                    sync_through_rclone(
+                        "onedrive:MyNote",
+                        Path(temporary_directory),
+                        lambda: self.fail("must not run local-only sync"),
+                    )
+
+
+class UpdateAndTermuxApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.server = LocalNoteServer(
+            ("127.0.0.1", 0),
+            self.root / "note",
+            WEB_DIR,
+            settings_path=self.root / "settings.json",
+            sync_state_path=self.root / "sync-state.json",
+        )
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=3)
+        self.temp_dir.cleanup()
+
+    def request_json(
+        self,
+        path: str,
+        method: str = "GET",
+        payload: dict[str, object] | None = None,
+    ) -> tuple[int, object]:
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Origin": self.base_url}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        request = Request(
+            self.base_url + path,
+            data=data,
+            headers=headers,
+            method=method,
+        )
+        with urlopen(request, timeout=3) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+    def test_app_info_and_manual_update_check_api(self) -> None:
+        with patch(
+            "app.check_for_updates",
+            return_value={
+                "current_version": "0.1.0",
+                "latest_version": "0.2.0",
+                "update_available": True,
+                "release_url": "https://github.com/mokusa11/TangoNote/releases/latest",
+                "release_notes": "Bug fixes",
+            },
+        ):
+            status, update = self.request_json("/api/updates/check")
+        self.assertEqual(status, 200)
+        self.assertTrue(update["update_available"])
+        info_status, info = self.request_json("/api/app-info")
+        self.assertEqual(info_status, 200)
+        self.assertEqual(info["version"], "0.1.0")
+        self.assertEqual(info["platform"], "desktop")
+        with urlopen(self.base_url + "/", timeout=3) as response:
+            page = response.read().decode("utf-8")
+        self.assertIn('id="check-updates-button"', page)
+        self.assertIn('id="sync-remote-form"', page)
+
+    def test_update_check_network_errors_are_visible_to_the_page(self) -> None:
+        with patch("app.check_for_updates", side_effect=UpdateError("GitHub 不可用")):
+            with self.assertRaises(HTTPError) as response:
+                urlopen(self.base_url + "/api/updates/check", timeout=3)
+        self.assertEqual(response.exception.code, 502)
+        self.assertIn("GitHub 不可用", response.exception.read().decode("utf-8"))
+
+    def test_termux_rclone_setting_uses_a_private_local_cache(self) -> None:
+        cache_directory = self.root / "termux-cache"
+        self.server.termux_mode = True
+        with patch("app.DEFAULT_TERMUX_SYNC_DIRECTORY", cache_directory):
+            status, result = self.request_json(
+                "/api/settings/sync-remote",
+                "PUT",
+                {"sync_remote": "onedrive:MyNote"},
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual(result["sync_remote"], "onedrive:MyNote")
+            status, sync_status = self.request_json("/api/sync/status")
+
+        self.assertEqual(status, 200)
+        self.assertTrue(sync_status["configured"])
+        self.assertEqual(sync_status["sync_remote"], "onedrive:MyNote")
+        self.assertTrue(cache_directory.is_dir())
+        settings = json.loads((self.root / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(settings["sync_remote"], "onedrive:MyNote")
+        self.assertEqual(Path(settings["sync_directory"]), cache_directory.resolve())
 
 
 

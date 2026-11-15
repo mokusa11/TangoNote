@@ -150,22 +150,41 @@
           <p id="highlight-rules-status" class="status-message" role="status" aria-live="polite"></p>
         </form>
       </section>
+      <section class="settings-section" aria-labelledby="update-settings-title">
+        <h3 id="update-settings-title">程序更新</h3>
+        <p>手动检查 TangoNote 的 GitHub 稳定版。检查只读取公开 Release 信息，不会自动下载或覆盖程序文件。</p>
+        <p id="update-platform-hint" class="settings-hint"></p>
+        <div class="settings-section-actions update-actions">
+          <button id="check-updates-button" class="button button-secondary" type="button">检查更新</button>
+          <a id="update-release-link" class="button button-quiet" href="https://github.com/mokusa11/TangoNote/releases/latest" target="_blank" rel="noopener noreferrer" hidden>打开发布页</a>
+        </div>
+        <p id="update-status" class="status-message" role="status" aria-live="polite">正在读取版本信息…</p>
+        <p id="update-release-notes" class="update-release-notes" hidden></p>
+      </section>
       <section class="settings-section" aria-labelledby="sync-settings-title">
         <h3 id="sync-settings-title">OneDrive 数据同步</h3>
-        <p>选择已登录 OneDrive 的本机同步文件夹。程序会同步笔记 TXT、附件和高光规则；同步是手动的，请确认 OneDrive 已完成文件同步后再在另一台设备操作。冲突会保留双方版本并等待选择，不会静默覆盖。程序不会额外加密同步文件，请只使用自己信任的 OneDrive 帐户。</p>
+        <p id="sync-platform-description">程序会同步笔记 TXT、附件和高光规则；同步是手动的，请确认 OneDrive 已完成文件同步后再在另一台设备操作。冲突会保留双方版本并等待选择，不会静默覆盖。程序不会额外加密同步文件，请只使用自己信任的 OneDrive 帐户。</p>
         <form id="sync-directory-form">
           <label for="sync-directory">OneDrive 内的同步文件夹完整路径</label>
           <input id="sync-directory" class="field" name="sync_directory" type="text" autocomplete="off" placeholder="例如 C:\Users\你\OneDrive\DictTango">
           <div class="settings-section-actions">
             <button id="save-sync-directory-button" class="button button-primary" type="submit">保存同步位置</button>
-            <button id="disable-sync-button" class="button button-quiet" type="button">关闭同步</button>
           </div>
-          <p id="sync-directory-status" class="status-message" role="status" aria-live="polite"></p>
+        </form>
+        <form id="sync-remote-form" hidden>
+          <label for="sync-remote">rclone OneDrive 路径</label>
+          <input id="sync-remote" class="field" name="sync_remote" type="text" autocomplete="off" placeholder="例如 onedrive:MyNote">
+          <p class="settings-hint">首次使用请在 Termux 执行 <code>pkg install rclone</code> 和 <code>rclone config</code>，完成 OneDrive 授权后填写“远程名称:文件夹”。同步只使用 rclone 的追加式 copy，不会删除云端历史。</p>
+          <div class="settings-section-actions">
+            <button id="save-sync-remote-button" class="button button-primary" type="submit">保存同步位置</button>
+          </div>
         </form>
         <div class="sync-actions">
           <button id="run-sync-button" class="button button-secondary" type="button">立即同步</button>
+          <button id="disable-sync-button" class="button button-quiet" type="button">关闭同步</button>
           <span id="sync-last-run" class="settings-hint"></span>
         </div>
+        <p id="sync-directory-status" class="status-message" role="status" aria-live="polite"></p>
         <div id="sync-conflicts" class="sync-conflicts" aria-live="polite"></div>
       </section>
       <p class="settings-coming-soon">其他设置选项将逐步添加。</p>

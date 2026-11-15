@@ -91,8 +91,8 @@ def build_release_archive(
     output_directory = Path(output_directory).resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
     files = _release_files(project_root)
-    archive_path = output_directory / f"DictTango-Notes-{version}-Windows.zip"
-    manifest_path = output_directory / f"DictTango-Notes-{version}-Windows.json"
+    archive_path = output_directory / f"TangoNote-{version}.zip"
+    manifest_path = output_directory / f"TangoNote-{version}.json"
     temporary_archive: Path | None = None
 
     try:
@@ -121,7 +121,7 @@ def build_release_archive(
             {
                 "format": RELEASE_FORMAT,
                 "version": version,
-                "platform": "windows",
+                "platform": "windows-termux",
                 "minimum_python": "3.10",
                 "archive": archive_path.name,
                 "sha256": checksum,
@@ -138,7 +138,7 @@ def build_release_archive(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build a Windows release archive without user data."
+        description="Build a cross-platform TangoNote release archive without user data."
     )
     parser.add_argument(
         "--output-directory",

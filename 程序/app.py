@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 import ipaddress
 import json
 import mimetypes
+import os
 import re
 import secrets
 import socket
@@ -33,7 +34,9 @@ from urllib.parse import (
 )
 
 from highlight_manager import HighlightManager
+from rclone_sync import sync_through_rclone, validate_rclone_remote
 from sync_manager import SyncManager, default_sync_state_path
+from update_manager import UpdateError, check_for_updates
 from note_store import (
     DEFAULT_GROUP as MYNOTE_DEFAULT_GROUP,
     MAX_BODY_LENGTH as MYNOTE_MAX_BODY_LENGTH,
@@ -42,6 +45,7 @@ from note_store import (
     NoteStore as MyNoteStore,
     StoreError as MyNoteStoreError,
 )
+from version import APP_VERSION
 
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -50,6 +54,9 @@ DATA_DIR = PROJECT_DIR / "数据"
 DEFAULT_DB_PATH = DATA_DIR / "notes.sqlite3"
 DEFAULT_NOTES_DIR = Path(__file__).resolve().parent / "note"
 DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parent / "settings.json"
+DEFAULT_TERMUX_SYNC_DIRECTORY = (
+    Path.home() / ".local" / "share" / "tangonote" / "sync-cache"
+)
 DEFAULT_PORT = 8766
 MAX_REQUEST_BYTES = 30_000_000
 MAX_PASTE_IMAGE_BYTES = 20_000_000
@@ -1182,6 +1189,32 @@ def load_sync_directory_setting(settings_path: Path) -> Path | None:
         raise ValueError("同步文件夹设置格式无效") from error
 
 
+def load_sync_remote_setting(settings_path: Path) -> str:
+    settings_path = Path(settings_path)
+    if not settings_path.exists():
+        return ""
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"无法读取 OneDrive rclone 设置：{error}") from error
+    if not isinstance(settings, dict):
+        raise ValueError("OneDrive rclone 设置格式无效")
+    remote = settings.get("sync_remote", "")
+    if not isinstance(remote, str):
+        raise ValueError("OneDrive rclone 设置格式无效")
+    try:
+        return validate_rclone_remote(remote)
+    except StoreError as error:
+        raise ValueError(str(error)) from error
+
+
+def is_termux_environment() -> bool:
+    return (
+        sys.platform.startswith("linux")
+        and os.environ.get("PREFIX") == "/data/data/com.termux/files/usr"
+    )
+
+
 def load_group_resource_directories(settings_path: Path) -> dict[str, str]:
     settings_path = Path(settings_path)
     try:
@@ -1393,10 +1426,16 @@ class LocalNoteServer(ThreadingHTTPServer):
             self.store,
             load_highlight_rules_path(self.settings_path),
         )
+        self.termux_mode = is_termux_environment()
+        self.sync_remote = load_sync_remote_setting(self.settings_path)
+        sync_directory = load_sync_directory_setting(self.settings_path)
+        if self.termux_mode and self.sync_remote and sync_directory is None:
+            DEFAULT_TERMUX_SYNC_DIRECTORY.mkdir(parents=True, exist_ok=True)
+            sync_directory = DEFAULT_TERMUX_SYNC_DIRECTORY
         self.sync_manager = SyncManager(
             self.store,
             self.highlight_manager,
-            load_sync_directory_setting(self.settings_path),
+            sync_directory,
             sync_state_path or default_sync_state_path(),
         )
         self.test_mode = test_mode
@@ -1410,12 +1449,16 @@ class LocalNoteServer(ThreadingHTTPServer):
         group_resource_directories: dict[str, str],
         highlight_rules_path: Path | None = None,
         sync_directory: Path | None | object = _UNSET_SETTING,
+        sync_remote: str | object = _UNSET_SETTING,
     ) -> None:
         temporary_path: Path | None = None
         configured_sync_directory = (
             self.sync_manager.sync_directory
             if sync_directory is _UNSET_SETTING
             else sync_directory
+        )
+        configured_sync_remote = (
+            self.sync_remote if sync_remote is _UNSET_SETTING else sync_remote
         )
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1440,6 +1483,7 @@ class LocalNoteServer(ThreadingHTTPServer):
                             "sync_directory": str(
                                 configured_sync_directory or ""
                             ),
+                            "sync_remote": str(configured_sync_remote or ""),
                         },
                         ensure_ascii=False,
                         indent=2,
@@ -1464,6 +1508,67 @@ class LocalNoteServer(ThreadingHTTPServer):
             )
             self.sync_manager.sync_directory = configured_path
         return configured_path
+
+    def set_sync_remote(self, remote: str) -> str:
+        if not self.termux_mode:
+            raise StoreError("OneDrive rclone 设置仅适用于 Android/Termux")
+        configured_remote = validate_rclone_remote(remote)
+        with self._settings_lock, self.sync_manager._lock:
+            configured_directory = self.sync_manager.sync_directory
+            if (
+                self.termux_mode
+                and configured_remote
+                and configured_directory is None
+            ):
+                DEFAULT_TERMUX_SYNC_DIRECTORY.mkdir(parents=True, exist_ok=True)
+                configured_directory = self.sync_manager.set_sync_directory(
+                    str(DEFAULT_TERMUX_SYNC_DIRECTORY)
+                )
+            self._write_settings(
+                self.store.notes_directory,
+                self.store.group_note_paths(),
+                self.store.group_resource_directories(),
+                sync_directory=configured_directory,
+                sync_remote=configured_remote,
+            )
+            self.sync_manager.sync_directory = configured_directory
+            self.sync_remote = configured_remote
+        return configured_remote
+
+    def sync_status(self) -> dict[str, object]:
+        status = self.sync_manager.status()
+        status["platform"] = "termux" if self.termux_mode else "desktop"
+        status["sync_remote"] = self.sync_remote
+        if self.termux_mode:
+            status["configured"] = bool(
+                self.sync_remote and self.sync_manager.sync_directory
+            )
+            status["sync_directory"] = ""
+        return status
+
+    def run_sync(self) -> dict[str, object]:
+        if self.termux_mode:
+            if not self.sync_remote or self.sync_manager.sync_directory is None:
+                raise StoreError(
+                    "请先配置 Termux 的 OneDrive rclone 同步位置。"
+                )
+            return sync_through_rclone(
+                self.sync_remote,
+                self.sync_manager.sync_directory,
+                self.sync_manager.sync,
+            )
+        return self.sync_manager.sync()
+
+    def resolve_sync_conflict(self, logical_path: str, choice: str) -> dict[str, object]:
+        if self.termux_mode and self.sync_remote:
+            if self.sync_manager.sync_directory is None:
+                raise StoreError("Termux OneDrive 同步缓存目录未配置。")
+            return sync_through_rclone(
+                self.sync_remote,
+                self.sync_manager.sync_directory,
+                lambda: self.sync_manager.resolve_conflict(logical_path, choice),
+            )
+        return self.sync_manager.resolve_conflict(logical_path, choice)
 
     def set_highlight_rules_path(self, path_value: str) -> Path:
         path_value = path_value.strip()
@@ -1492,7 +1597,6 @@ class LocalNoteServer(ThreadingHTTPServer):
             )
             self.highlight_manager = manager
         return path
-
     def set_notes_directory(self, directory: str) -> None:
         directory = directory.strip()
         if not directory:
@@ -2186,9 +2290,24 @@ gap:3px 10px;margin:8px 0 0}}.local-debug-panel dt{{font-weight:700}}
                     },
                 )
             return
+        if parsed.path == "/api/app-info":
+            self._json(
+                200,
+                {
+                    "version": APP_VERSION,
+                    "platform": "termux" if self.server.termux_mode else "desktop",
+                },
+            )
+            return
+        if parsed.path == "/api/updates/check":
+            try:
+                self._json(200, check_for_updates())
+            except UpdateError as error:
+                self._error(502, str(error))
+            return
         if parsed.path == "/api/sync/status":
             try:
-                self._json(200, self.server.sync_manager.status())
+                self._json(200, self.server.sync_status())
             except StoreError as error:
                 self._error(error.status, str(error))
             return
@@ -2481,7 +2600,7 @@ gap:3px 10px;margin:8px 0 0}}.local-debug-panel dt{{font-weight:700}}
                 if data:
                     raise StoreError("同步请求参数无效")
                 with self.server._settings_lock:
-                    result = self.server.sync_manager.sync()
+                    result = self.server.run_sync()
                 self._json(200, result)
                 return
             if parsed.path == "/api/sync/resolve":
@@ -2490,7 +2609,7 @@ gap:3px 10px;margin:8px 0 0}}.local-debug-panel dt{{font-weight:700}}
                 if not isinstance(logical_path, str) or not isinstance(choice, str):
                     raise StoreError("冲突解决请求格式无效")
                 with self.server._settings_lock:
-                    result = self.server.sync_manager.resolve_conflict(
+                    result = self.server.resolve_sync_conflict(
                         logical_path, choice
                     )
                 self._json(200, result)
@@ -2570,6 +2689,15 @@ gap:3px 10px;margin:8px 0 0}}.local-debug-panel dt{{font-weight:700}}
                         )
                     },
                 )
+                return
+            if parsed.path == "/api/settings/sync-remote":
+                if not isinstance(data, dict):
+                    raise StoreError("OneDrive rclone 设置格式无效")
+                remote = data.get("sync_remote")
+                if not isinstance(remote, str):
+                    raise StoreError("OneDrive rclone 路径无效")
+                configured_remote = self.server.set_sync_remote(remote)
+                self._json(200, {"sync_remote": configured_remote})
                 return
             if parsed.path == "/api/settings/group-resources":
                 group = data.get("group")

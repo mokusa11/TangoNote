@@ -13,6 +13,8 @@ const state = {
   backupImporting: false,
   syncBusy: false,
   syncConfigured: false,
+  platform: "desktop",
+  appVersion: "",
   editingGroupId: null,
   pendingGroupName: null,
   draftGroupPaths: null,
@@ -359,7 +361,9 @@ function wireEvents() {
   byId("notes-directory-form").addEventListener("submit", saveNotesDirectory);
   byId("highlight-rules-form").addEventListener("submit", saveHighlightRulesPath);
   byId("sync-directory-form").addEventListener("submit", saveSyncDirectory);
+  byId("sync-remote-form").addEventListener("submit", saveSyncRemote);
   byId("disable-sync-button").addEventListener("click", disableSync);
+  byId("check-updates-button").addEventListener("click", checkForUpdates);
   byId("run-sync-button").addEventListener("click", runSync);
   byId("quick-sync-button").addEventListener("click", quickSync);
   byId("close-sync-report-button").addEventListener("click", () => syncReportDialog.close());
@@ -377,6 +381,7 @@ function wireEvents() {
   });
   byId("open-settings-dialog").addEventListener("click", () => {
     if (!settingsDialog.open) settingsDialog.showModal();
+    refreshAppInfo();
     refreshSyncStatus();
   });
   byId("close-settings-dialog").addEventListener("click", () => settingsDialog.close());
@@ -719,17 +724,26 @@ function renderSyncConflicts(conflicts) {
 async function refreshSyncStatus(message = "") {
   try {
     const status = await api("/api/sync/status");
+    state.platform = status.platform || "desktop";
     state.syncConfigured = status.configured;
-    const input = byId("sync-directory");
+    const isTermux = state.platform === "termux";
+    byId("sync-directory-form").hidden = isTermux;
+    byId("sync-remote-form").hidden = !isTermux;
+    byId("sync-platform-description").textContent = isTermux
+      ? "Android 通过 Termux 中的 rclone 连接 OneDrive。程序会同步笔记 TXT、附件和高光规则；只手动同步，不会删除云端历史。冲突会保留双方版本并等待选择。"
+      : "程序会同步笔记 TXT、附件和高光规则；同步是手动的，请确认 OneDrive 已完成文件同步后再在另一台设备操作。冲突会保留双方版本并等待选择，不会静默覆盖。程序不会额外加密同步文件，请只使用自己信任的 OneDrive 帐户。";
+    const input = byId(isTermux ? "sync-remote" : "sync-directory");
     if (document.activeElement !== input) {
-      input.value = status.sync_directory;
+      input.value = isTermux ? status.sync_remote || "" : status.sync_directory;
     }
     byId("disable-sync-button").disabled = !status.configured || state.syncBusy;
     byId("run-sync-button").disabled = !status.configured || state.syncBusy;
     updateQuickSyncButton();
     byId("sync-directory-status").textContent = status.configured
-      ? `同步已启用：${status.sync_directory}`
-      : "尚未配置同步文件夹。";
+      ? `同步已启用：${isTermux ? status.sync_remote : status.sync_directory}`
+      : isTermux
+        ? "尚未配置 OneDrive rclone 位置。"
+        : "尚未配置同步文件夹。";
     byId("sync-last-run").textContent = status.last_sync_at
       ? `上次同步：${formatDate(status.last_sync_at)}`
       : "";
@@ -743,6 +757,49 @@ async function refreshSyncStatus(message = "") {
     byId("run-sync-button").disabled = true;
     byId("disable-sync-button").disabled = true;
     return null;
+  }
+}
+
+async function refreshAppInfo() {
+  try {
+    const info = await api("/api/app-info");
+    state.platform = info.platform || "desktop";
+    state.appVersion = info.version;
+    byId("update-status").textContent = `当前版本：${info.version}`;
+    byId("update-platform-hint").textContent = state.platform === "termux"
+      ? "安卓：检查到更新后，在 Termux:Widget 中运行“更新笔记程序”；更新包会校验 SHA-256、保留本机数据，并在服务原本运行时自动重启。"
+      : "Windows：检查到更新后，从发布页下载 ZIP；按页面说明停止程序并覆盖程序文件。更新包不包含个人数据。";
+  } catch (error) {
+    byId("update-status").textContent = error.message;
+  }
+}
+
+async function checkForUpdates() {
+  const button = byId("check-updates-button");
+  const link = byId("update-release-link");
+  const notes = byId("update-release-notes");
+  button.disabled = true;
+  link.hidden = true;
+  notes.hidden = true;
+  byId("update-status").textContent = "正在连接 GitHub 检查最新版本…";
+  try {
+    const result = await api("/api/updates/check");
+    state.appVersion = result.current_version;
+    if (result.update_available) {
+      byId("update-status").textContent =
+        `发现新版本 ${result.latest_version}（当前版本 ${result.current_version}）。`;
+      link.href = result.release_url;
+      link.hidden = false;
+      notes.textContent = result.release_notes || "该版本未提供更新说明。";
+      notes.hidden = false;
+    } else {
+      byId("update-status").textContent =
+        `当前已是最新版本（${result.current_version}）。`;
+    }
+  } catch (error) {
+    byId("update-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -840,13 +897,36 @@ async function saveSyncDirectory(event) {
   }
 }
 
+async function saveSyncRemote(event) {
+  event.preventDefault();
+  const input = byId("sync-remote");
+  const button = byId("save-sync-remote-button");
+  button.disabled = true;
+  byId("sync-directory-status").textContent = "正在保存 OneDrive rclone 位置…";
+  try {
+    const result = await api("/api/settings/sync-remote", {
+      method: "PUT",
+      body: JSON.stringify({ sync_remote: input.value }),
+    });
+    input.value = result.sync_remote;
+    await refreshSyncStatus(
+      "同步位置已保存。确保 rclone OneDrive 已授权后，点击“立即同步”。",
+    );
+  } catch (error) {
+    byId("sync-directory-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function disableSync() {
   const button = byId("disable-sync-button");
   button.disabled = true;
   try {
-    await api("/api/settings/sync-directory", {
+    const termux = state.platform === "termux";
+    await api(termux ? "/api/settings/sync-remote" : "/api/settings/sync-directory", {
       method: "PUT",
-      body: JSON.stringify({ sync_directory: "" }),
+      body: JSON.stringify(termux ? { sync_remote: "" } : { sync_directory: "" }),
     });
     await refreshSyncStatus("同步已关闭；云端和本机文件均未删除。");
   } catch (error) {
@@ -995,6 +1075,7 @@ async function deleteSelectedNote() {
 
 async function start() {
   wireEvents();
+  await refreshAppInfo();
   const params = new URLSearchParams(window.location.search);
   const term = params.get("word") || params.get("q") || params.get("keyword") || "";
   const noteIdValue = params.get("note");
