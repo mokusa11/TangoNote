@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f7fb">
+  <meta name="description" content="运行在本机的 DictTango 笔记词典">
+  <title>本地笔记词典</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="本地笔记词典首页">
+      <span class="brand-mark">记</span>
+      <span><small>DICTTANGO · LOCAL</small><strong>本地笔记词典</strong></span>
+    </a>
+    <div class="top-actions">
+      <a class="button button-quiet" href="/highlights">高光管理</a>
+      <a class="button button-quiet" href="/backup/export.json">导出备份</a>
+      <button id="open-import-dialog" class="button button-quiet" type="button">导入备份</button>
+      <button id="open-settings-dialog" class="button button-quiet settings-button" type="button" aria-label="设置" title="设置">
+        <span aria-hidden="true">⚙</span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="welcome">
+      <div>
+        <p class="eyebrow">YOUR WORDS · YOUR NOTES</p>
+        <h1>把自己的笔记，整理成可查的词典。</h1>
+        <p>笔记由本地程序管理；DictTango 可通过在线词典地址查询并显示笔记。</p>
+      </div>
+      <button class="button button-primary" id="new-note-button" type="button">
+        <span aria-hidden="true">＋</span> 新建笔记
+      </button>
+    </section>
+
+    <section class="layout" aria-label="笔记管理区">
+      <div class="library-column">
+        <aside class="sidebar card">
+          <div class="sidebar-heading">
+            <div><p class="eyebrow">LIBRARY</p><h2>笔记</h2></div>
+            <div class="sidebar-heading-actions">
+              <button id="quick-sync-button" class="quick-sync-button" type="button" aria-label="配置同步位置" title="配置同步位置">
+                <span class="quick-sync-icon" aria-hidden="true">↻</span>
+                <span>同步</span>
+              </button>
+              <span id="note-count" class="count-pill">0</span>
+            </div>
+          </div>
+          <label class="search-field">
+            <span aria-hidden="true">⌕</span>
+            <input id="search-input" type="search" inputmode="search" placeholder="搜索词条或正文" autocomplete="off">
+            <button id="clear-search" type="button" aria-label="清空搜索" hidden>×</button>
+          </label>
+          <div class="group-heading"><span>分组</span><button id="add-group-button" class="text-button" type="button">＋ 新建</button></div>
+          <nav id="group-list" class="group-list" aria-label="笔记分组"></nav>
+          <div class="list-heading"><span>词条</span><span id="result-count"></span></div>
+          <div id="results-list" class="results-list" aria-live="polite"></div>
+        </aside>
+
+        <section id="current-group-info" class="current-group-info card" aria-labelledby="current-group-title">
+          <div class="current-group-heading">
+            <h2 id="current-group-title">当前分组</h2>
+            <span id="current-group-count">0 条笔记</span>
+          </div>
+          <p id="current-group-name" class="current-group-name">全部笔记</p>
+          <dl id="current-group-paths" class="current-group-paths" hidden>
+            <div class="current-group-path">
+              <dt>笔记文件</dt>
+              <dd id="current-group-note-path"></dd>
+            </div>
+            <div class="current-group-path">
+              <dt>资源目录</dt>
+              <dd id="current-group-resource-path"></dd>
+            </div>
+          </dl>
+          <p id="current-group-info-hint" class="current-group-info-hint">选择单个分组可查看其笔记文件和资源目录。</p>
+          <p id="toast" class="status-message" role="status" aria-live="polite"></p>
+        </section>
+      </div>
+
+      <section class="detail card" aria-label="笔记内容">
+        <div id="detail-empty" class="empty-state">
+          <div class="empty-art" aria-hidden="true">Aa</div>
+          <h2>选择一条笔记</h2>
+          <p>从左侧选择词条，或创建一条新笔记。</p>
+          <button class="button button-secondary" id="empty-new-button" type="button">创建笔记</button>
+        </div>
+        <article id="note-detail" hidden>
+          <div class="detail-toolbar">
+            <span id="detail-group" class="group-chip"></span>
+            <div class="button-row">
+              <button class="button button-secondary" id="edit-button" type="button">编辑</button>
+              <button class="button button-danger" id="delete-button" type="button">删除</button>
+            </div>
+          </div>
+          <h2 id="detail-term" class="detail-term"></h2>
+          <p id="detail-meta" class="detail-meta"></p>
+          <div id="detail-body" class="note-content"></div>
+        </article>
+      </section>
+    </section>
+    <dialog id="editor-dialog" class="editor-dialog" aria-labelledby="editor-dialog-title">
+      <header class="dialog-heading">
+        <h2 id="editor-dialog-title">编辑笔记</h2>
+        <button id="close-editor-button" class="button button-quiet" type="button" aria-label="关闭编辑器">关闭</button>
+      </header>
+      <iframe id="editor-frame" title="笔记编辑器" src="about:blank"></iframe>
+    </dialog>
+    <dialog id="import-dialog" class="delete-dialog import-dialog" aria-labelledby="import-dialog-title">
+      <h2 id="import-dialog-title">导入备份</h2>
+      <p>选择 JSON 备份后将立即合并笔记；相同分组和词条的现有笔记会被备份内容覆盖。附件不包含在 JSON 备份中。</p>
+      <label class="import-file-label" for="import-file">JSON 备份文件</label>
+      <input id="import-file" type="file" accept="application/json,.json">
+      <p id="import-status" class="status-message" role="status" aria-live="polite"></p>
+      <div class="delete-dialog-actions">
+        <button id="cancel-import-button" class="button button-quiet" type="button">取消</button>
+        <button class="button button-primary" id="import-button" type="button" disabled>导入所选备份</button>
+      </div>
+    </dialog>
+    <dialog id="settings-dialog" class="delete-dialog settings-dialog" aria-labelledby="settings-dialog-title">
+      <div class="settings-dialog-heading">
+        <h2 id="settings-dialog-title">设置</h2>
+        <button id="close-settings-dialog" class="button button-quiet settings-close-button" type="button" aria-label="关闭设置">×</button>
+      </div>
+      <section class="settings-section" aria-labelledby="notes-directory-title">
+        <h3 id="notes-directory-title">本地笔记根文件夹</h3>
+        <p>切换到已存在的文件夹后立即生效并保存；不会移动或删除原目录内容。</p>
+        <form id="notes-directory-form">
+          <label for="notes-directory">根文件夹路径</label>
+          <input id="notes-directory" class="field" name="notes_directory" type="text" required autocomplete="off">
+          <div class="settings-section-actions">
+            <button id="save-notes-directory-button" class="button button-primary" type="submit">切换文件夹</button>
+          </div>
+          <p id="notes-directory-status" class="status-message" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+      <section class="settings-section" aria-labelledby="highlight-rules-title">
+        <h3 id="highlight-rules-title">高光数据文件</h3>
+        <p>设置保存发送状态和分类的 JSON 文件路径。目标文件不存在时会复制当前数据；目标文件已存在时会使用其中的数据，原文件不会删除。</p>
+        <form id="highlight-rules-form">
+          <label for="highlight-rules-path">JSON 文件完整路径</label>
+          <input id="highlight-rules-path" class="field" name="highlight_rules_path" type="text" required autocomplete="off">
+          <div class="settings-section-actions">
+            <button id="save-highlight-rules-button" class="button button-primary" type="submit">保存路径</button>
+          </div>
+          <p id="highlight-rules-status" class="status-message" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+      <section class="settings-section" aria-labelledby="sync-settings-title">
+        <h3 id="sync-settings-title">OneDrive 数据同步</h3>
+        <p>选择已登录 OneDrive 的本机同步文件夹。程序会同步笔记 TXT、附件和高光规则；同步是手动的，请确认 OneDrive 已完成文件同步后再在另一台设备操作。冲突会保留双方版本并等待选择，不会静默覆盖。程序不会额外加密同步文件，请只使用自己信任的 OneDrive 帐户。</p>
+        <form id="sync-directory-form">
+          <label for="sync-directory">OneDrive 内的同步文件夹完整路径</label>
+          <input id="sync-directory" class="field" name="sync_directory" type="text" autocomplete="off" placeholder="例如 C:\Users\你\OneDrive\DictTango">
+          <div class="settings-section-actions">
+            <button id="save-sync-directory-button" class="button button-primary" type="submit">保存同步位置</button>
+            <button id="disable-sync-button" class="button button-quiet" type="button">关闭同步</button>
+          </div>
+          <p id="sync-directory-status" class="status-message" role="status" aria-live="polite"></p>
+        </form>
+        <div class="sync-actions">
+          <button id="run-sync-button" class="button button-secondary" type="button">立即同步</button>
+          <span id="sync-last-run" class="settings-hint"></span>
+        </div>
+        <div id="sync-conflicts" class="sync-conflicts" aria-live="polite"></div>
+      </section>
+      <p class="settings-coming-soon">其他设置选项将逐步添加。</p>
+    </dialog>
+    <dialog id="sync-report-dialog" class="delete-dialog sync-report-dialog" aria-labelledby="sync-report-title">
+      <div class="sync-report-heading">
+        <span id="sync-report-icon" class="sync-report-icon" aria-hidden="true">✓</span>
+        <div>
+          <h2 id="sync-report-title">同步完成</h2>
+          <p id="sync-report-message" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+      <div id="sync-report-stats" class="sync-report-stats">
+        <div><span>上传</span><strong id="sync-report-uploaded">0</strong><span>项</span></div>
+        <div><span>下载</span><strong id="sync-report-downloaded">0</strong><span>项</span></div>
+        <div><span>待处理冲突</span><strong id="sync-report-conflict-count">0</strong><span>项</span></div>
+      </div>
+      <section id="sync-report-conflicts" class="sync-report-conflicts" aria-labelledby="sync-report-conflicts-title" hidden>
+        <h3 id="sync-report-conflicts-title">需要处理的冲突</h3>
+        <ul id="sync-report-conflict-list"></ul>
+      </section>
+      <p id="sync-report-error" class="sync-report-error" role="alert" hidden></p>
+      <div class="delete-dialog-actions">
+        <button id="sync-report-view-conflicts" class="button button-secondary" type="button" hidden>处理冲突</button>
+        <button id="close-sync-report-button" class="button button-primary" type="button">完成</button>
+      </div>
+    </dialog>
+    <dialog id="delete-dialog" class="delete-dialog" aria-labelledby="delete-dialog-title">
+      <h2 id="delete-dialog-title">删除笔记</h2>
+      <p id="delete-confirmation-message"></p>
+      <p id="delete-status" class="status-message" role="status" aria-live="polite"></p>
+      <div class="delete-dialog-actions">
+        <button id="cancel-delete-button" class="button button-quiet" type="button">取消</button>
+        <button id="confirm-delete-button" class="button button-danger" type="button">确认删除</button>
+      </div>
+    </dialog>
+    <dialog id="note-actions-dialog" class="delete-dialog note-actions-dialog" aria-labelledby="note-actions-title">
+      <h2 id="note-actions-title">管理笔记</h2>
+      <p id="note-actions-message"></p>
+      <div class="delete-dialog-actions">
+        <button id="note-actions-edit" class="button button-primary" type="button">编辑</button>
+        <button id="note-actions-delete" class="button button-danger" type="button">删除</button>
+        <button id="note-actions-cancel" class="button button-quiet" type="button">取消</button>
+      </div>
+    </dialog>
+    <dialog id="group-dialog" class="delete-dialog" aria-labelledby="group-dialog-title">
+      <form id="group-form">
+        <h2 id="group-dialog-title">新建分组</h2>
+        <label class="group-dialog-label" for="group-name">分组名称</label>
+        <input id="group-name" class="field" name="name" maxlength="80" required autocomplete="off">
+        <p id="group-dialog-status" class="status-message" role="status" aria-live="polite"></p>
+        <div class="delete-dialog-actions">
+          <button id="group-cancel-button" class="button button-quiet" type="button">取消</button>
+          <button id="group-delete-button" class="button button-danger" type="button" hidden>删除</button>
+          <button id="edit-group-path-button" class="button button-secondary" type="button" hidden title="编辑分组笔记文件及资源路径">编辑</button>
+          <button id="group-save-button" class="button button-primary" type="submit">下一步：设置路径</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="group-path-dialog" class="delete-dialog group-path-dialog" aria-labelledby="group-path-dialog-title">
+      <h2 id="group-path-dialog-title">编辑分组路径</h2>
+      <p id="group-path-dialog-name" class="group-path-dialog-name"></p>
+      <fieldset class="path-choice-group">
+        <legend>TXT 笔记文件</legend>
+        <label class="path-choice-option"><input type="radio" name="note-path-mode" value="default">使用笔记根文件夹中的默认 TXT 文件</label>
+        <label class="path-choice-option"><input type="radio" name="note-path-mode" value="custom">自定义 TXT 路径</label>
+        <div id="group-note-path-field" class="path-custom-field" hidden>
+          <label for="group-note-path">TXT 文件完整路径</label>
+          <input id="group-note-path" class="field" type="text" autocomplete="off">
+          <p id="group-note-default-path" class="path-setting-hint"></p>
+        </div>
+      </fieldset>
+      <fieldset class="path-choice-group">
+        <legend>资源文件夹</legend>
+        <label class="path-choice-option"><input type="radio" name="resource-path-mode" value="default">默认：与 TXT 文件同名的资源文件夹</label>
+        <label class="path-choice-option"><input type="radio" name="resource-path-mode" value="custom">自定义资源文件夹</label>
+        <div id="group-resource-path-field" class="path-custom-field" hidden>
+          <label for="group-resource-path">资源文件夹完整路径</label>
+          <input id="group-resource-path" class="field" type="text" autocomplete="off">
+          <p id="group-resource-default-path" class="path-setting-hint"></p>
+        </div>
+      </fieldset>
+      <p class="group-path-dialog-hint">新建分组时，TXT 会直接创建在所选路径（所在文件夹须已存在）；已有分组切换到自定义 TXT 路径时，须指向已有且文件名与分组对应的 MyNote 文件。切换路径不会搬动或删除已有文件。</p>
+      <p id="group-path-status" class="status-message" role="status" aria-live="polite"></p>
+      <div class="delete-dialog-actions">
+        <button id="cancel-group-path-button" class="button button-quiet" type="button">取消</button>
+        <button id="save-group-paths-button" class="button button-primary" type="button">保存路径</button>
+      </div>
+    </dialog>
+    <dialog id="group-delete-dialog" class="delete-dialog" aria-labelledby="group-delete-dialog-title">
+      <h2 id="group-delete-dialog-title">删除分组</h2>
+      <p id="group-delete-message"></p>
+      <p id="group-delete-status" class="status-message" role="status" aria-live="polite"></p>
+      <div class="delete-dialog-actions">
+        <button id="cancel-group-delete-button" class="button button-quiet" type="button">取消</button>
+        <button id="confirm-group-delete-button" class="button button-danger" type="button">确认删除</button>
+      </div>
+    </dialog>
+    <footer><span class="status-dot"></span><span>仅本机访问 · 笔记与 MyNote 文本文件通用</span><span id="connection-status"></span></footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,11 @@
+/程序/settings.json
+/程序/highlight-rules.json
+/程序/note/
+/数据/
+/dist/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.sqlite3
+*.db
+.dict-tango-sync/

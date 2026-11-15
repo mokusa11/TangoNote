@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f7fb">
+  <meta name="description" content="管理发送到 DictTango 高光脚本的词头">
+  <title>高光管理 · 本地笔记词典</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/highlights.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="返回本地笔记词典首页">
+      <span class="brand-mark">记</span>
+      <span><small>DICTTANGO · LOCAL</small><strong>本地笔记词典</strong></span>
+    </a>
+    <div class="top-actions">
+      <a class="button button-quiet" href="/">返回笔记管理</a>
+    </div>
+  </header>
+
+  <main class="highlight-main">
+    <section class="highlight-intro">
+      <p class="eyebrow">MYNOTE · HIGHLIGHTS</p>
+      <h1>高光管理</h1>
+      <p>管理 J5 词典分组中哪些词头会发送给高光脚本。默认全部发送；排除词头不会从笔记中删除。</p>
+    </section>
+
+    <section class="highlight-summary" aria-label="高光词头统计">
+      <article class="card highlight-stat">
+        <span>可发送词头</span><strong id="included-count">—</strong>
+      </article>
+      <article class="card highlight-stat">
+        <span>已排除词头</span><strong id="excluded-count">—</strong>
+      </article>
+      <article class="card highlight-stat">
+        <span>分类</span><strong id="category-count">—</strong>
+      </article>
+    </section>
+
+    <section class="card highlight-manager" aria-label="词头筛选与批量管理">
+      <div class="highlight-filter-row">
+        <label class="highlight-search" for="highlight-search">
+          <span aria-hidden="true">⌕</span>
+          <input id="highlight-search" type="search" placeholder="搜索词头" autocomplete="off">
+        </label>
+        <label class="highlight-filter">
+          <span>发送状态</span>
+          <select id="highlight-status-filter" class="field">
+            <option value="all">全部状态</option>
+            <option value="included">会发送</option>
+            <option value="excluded">已排除</option>
+          </select>
+        </label>
+        <label class="highlight-filter">
+          <span>分类</span>
+          <select id="highlight-category-filter" class="field">
+            <option value="">全部分类</option>
+          </select>
+        </label>
+        <button id="refresh-highlights" class="button button-quiet" type="button">刷新</button>
+      </div>
+
+      <div class="highlight-batch">
+        <div class="highlight-selection">
+          <strong id="selection-count" aria-live="polite">尚未选择词头</strong>
+          <div class="highlight-selection-actions">
+            <button id="select-page" class="button button-quiet" type="button">选择本页</button>
+            <button id="select-all-matching" class="button button-quiet" type="button">选择全部筛选结果</button>
+            <button id="clear-selection" class="button button-quiet" type="button">清除选择</button>
+          </div>
+        </div>
+        <p class="highlight-selection-help">在当前页列表中按住鼠标左键拖动可框选；先勾选一个词头，再按住 Shift 点击同页另一个复选框，可连续选中两者之间的词头。</p>
+        <div class="highlight-batch-actions">
+          <span class="highlight-action-label">批量发送状态</span>
+          <button id="include-selected" class="button button-secondary" type="button" disabled>设为发送</button>
+          <button id="exclude-selected" class="button button-danger" type="button" disabled>设为不发送</button>
+        </div>
+        <div class="highlight-batch-actions highlight-category-actions">
+          <label for="highlight-category-name">批量分类</label>
+          <input id="highlight-category-name" class="field" type="text" maxlength="40"
+            list="highlight-category-options" placeholder="输入或选择分类名称" autocomplete="off">
+          <datalist id="highlight-category-options"></datalist>
+          <button id="add-category" class="button button-secondary" type="button" disabled>添加分类</button>
+          <button id="remove-category" class="button button-quiet" type="button" disabled>移除分类</button>
+        </div>
+      </div>
+      <p id="highlight-status-message" class="status-message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="card highlight-results" aria-label="高光词头列表">
+      <div class="highlight-list-heading">
+        <div><h2>词头列表</h2><span id="highlight-result-count">正在读取…</span></div>
+        <div class="highlight-pagination">
+          <button id="previous-page" class="button button-quiet" type="button" disabled>上一页</button>
+          <span id="page-label" aria-live="polite">第 1 页</span>
+          <button id="next-page" class="button button-quiet" type="button" disabled>下一页</button>
+        </div>
+      </div>
+      <div id="highlight-list" class="highlight-list" aria-live="polite">
+        <p class="highlight-empty">正在读取 J5 词典词头…</p>
+      </div>
+    </section>
+    <footer><span class="status-dot"></span><span>本机管理 · 不修改词条笔记正文</span></footer>
+  </main>
+  <div id="selection-rectangle" class="selection-rectangle" aria-hidden="true" hidden></div>
+</body>
+</html>
